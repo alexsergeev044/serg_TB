@@ -1,43 +1,76 @@
-import telebot
-from extensions import APIException, Convertor
-from config import TOKEN, exchanges
-import traceback
+import json
+import requests
+from config import openexchanger_token, exchangerate_token
 
-exchanges = {
-    'доллар': 'USD',
-    'евро': 'EUR',
-    'рубль': 'RUB'
-}
-TOKEN = "6494826299:AAE1czblb3qLZ9O600viwDeus8CWTEUaJCQ"
 
-bot = telebot.TeleBot(TOKEN)
+class APIException (Exception):
+    pass
 
-@bot.message_handler(commands=['start', 'help'])
-def start(message: telebot.types.Message):
-    text = "Приветствие!"
-    bot.send_message(message.chat.id, text)
 
-@bot.message_handler(commands=['values'])
-def values(message: telebot.types.Message):
-    text = 'Доступные валюты:'
-    for i in exchanges.keys():
-        text = '\n'.join((text, i))
-    bot.reply_to(message, text)
+class HTMLException (Exception):
+    pass
 
-@bot.message_handler(content_types=['text'])
-def converter(message: telebot.types.Message):
-    values = message.text.split(' ')
-    try:
-        if len(values) != 3:
-            raise APIException('Неверное количество параметров!')
-        
-        answer = Convertor.get_price(*values)
-    except APIException as e:
-        bot.reply_to(message, f"Ошибка в команде:\n{e}" )
-    except Exception as e:
-        traceback.print_tb(e.__traceback__)
-        bot.reply_to(message, f"Неизвестная ошибка:\n{e}" )
-    else:
-        bot.reply_to(message,answer)
 
-bot.polling()
+class CurrencyExcange:
+    @staticmethod
+    def get_price(val, keys):
+
+        if len(val) != 3:
+            raise APIException("Количество параметров должно быть равно трём!")
+
+        quote, base, amount = val
+
+        if quote == base:
+            raise APIException("Валюты должны различаться!")
+
+        if quote not in keys.keys():
+            raise APIException(f"Некорректное или отсутствующее в базе название валюты '(quote)'!")
+
+        if base not in keys.keys():
+            raise APIException(f"Некорректное или отсутствующее в базе название валюты '(base0'!")
+
+        if not amount.isdigit():
+            raise APIException("Сумма валюты должна быть положительным числом!")
+
+        if int(amount) <= 0:
+            raise APIException("Сумма валюты должна быть положительным числом!")
+
+        result = ""
+
+        try:
+            try:
+                h = requests.get(f"https://openexchangerates.org/api/latest.json?app_id={openexchanger_token}base=USD&symbols={keys[quote]},{keys[base]}")
+                openexrates = round(float(json.loads(h.content)['rates'][keys[base]]) /
+                                    float(json.loads(h.content)['rates'][keys[quote]]) * float(amount), 4)
+                result += f"По данным openexchangerates.org:\n{amount}{keys[quote]}={openexrates}{keys[base]}\n\n"
+            except Exception:
+                raise HTMLException(f"Ошибка сервиса openexchangerates.org!\n\n")
+        except HTMLException as e:
+            result += f"{e}"
+
+        try:
+            try:
+                e = requests.get(f"http://api.exchangeratesapi.io/v1/latest?"
+                                 f"access_key={exchangerate_token}"
+                                 f"base=EUR&symbols={keys[quote]},{keys[base]}")
+                exratesio = round(float(json.loads(e.content)['rates'][keys[base]]) /
+                                  float(json.loads(e.content)['rates'][keys[quote]]) * float(amount), 4)
+                result += f"По данным exchangeratesapi.io:\n{amount} {keys[quote]} = {exratesio} {keys[base]}\n\n"
+            except Exception:
+                raise HTMLException(f"Ошибка сервиса exchangeratesapi.io!/n/n")
+        except HTMLException as e:
+            result += f"{e}"
+
+        try:
+            try:
+                r = requests.get(f"https://min-api.cryptocompare.com/data/price?fsym={keys[quote]}&tsyms={keys[base]}")
+                cryptocompare = round(float(json.loads(r.content)[keys[base]]) * float(amount), 4)
+                result += f"По данным cryptocompare.com:/n" \
+                          f"{amount} {keys[quote]} = {cryptocompare} {keys[base]}\n\n"
+            except Exception:
+                raise HTMLException(f"Ошибка сервиса cryptocompare.com!\n\n")
+        except HTMLException as e:
+            result += f"{e}"
+
+        return result
+
